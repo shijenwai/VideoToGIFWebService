@@ -3,6 +3,7 @@ import logging
 import subprocess
 import time
 import threading
+import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
@@ -198,8 +199,14 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if not await download_video(file, input_path):
             await update.message.reply_text("❌ 下載失敗")
             return
-            
-        if not convert_to_gif_with_retry(input_path, output_path):
+        
+        # 在執行緒池中執行阻塞的轉檔操作，避免卡住 event loop
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(
+            None, convert_to_gif_with_retry, input_path, output_path
+        )
+        
+        if not success:
             await update.message.reply_text("❌ 轉檔失敗 (檔案過大或超時)")
             return
 
