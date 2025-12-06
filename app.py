@@ -72,20 +72,20 @@ def estimate_start_config(duration: float, file_size_mb: float) -> int:
     根據影片時長和檔案大小，估算應該從哪個配置開始
     回傳 configs 陣列的起始索引
     """
-    # 經驗公式：GIF 大小 ≈ 時長(秒) × FPS × 寬度² × 0.00001 (粗估)
-    # 簡化判斷：用「時長 × 原始大小」作為複雜度指標
+    # 主要根據時長判斷，因為 GIF 大小與幀數（時長×FPS）高度相關
+    # 檔案大小作為輔助參考
     complexity = duration * file_size_mb
     
-    if complexity > 3000:      # 超長/超大影片 (如 2分鐘 × 30MB)
-        return 4               # 直接從最低品質開始
-    elif complexity > 1500:    # 長影片 (如 1分鐘 × 20MB)
+    if duration > 90 or complexity > 1500:   # 超過 1.5 分鐘，或複雜度極高
+        return 4                              # 直接從最低品質開始
+    elif duration > 60 or complexity > 800:  # 超過 1 分鐘
         return 3
-    elif complexity > 600:     # 中等影片 (如 30秒 × 20MB)
+    elif duration > 30 or complexity > 300:  # 超過 30 秒
         return 2
-    elif complexity > 200:     # 短影片 (如 15秒 × 15MB)
+    elif duration > 15 or complexity > 100:  # 超過 15 秒
         return 1
-    else:                      # 很短的影片
-        return 0               # 從最高品質開始
+    else:                                    # 15 秒內短影片
+        return 0                             # 從最高品質開始
 
 def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: int = 20) -> bool:
     """
