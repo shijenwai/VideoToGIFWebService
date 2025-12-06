@@ -1,2 +1,1 @@
 python-telegram-bot>=20.0
-# Render 網路環境正常，不需要鎖定 httpx 版本，也不需要 fastapi/uvicorn
