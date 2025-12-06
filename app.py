@@ -150,3 +150,51 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/")
 def health_check():
     return {"status": "alive", "mode": "polling"}
+
+
+# --- 新增：診斷儀表板 (Doctor Endpoint) ---
+import socket
+import httpx
+
+@app.get("/debug")
+async def debug_connectivity():
+    """手動觸發連線測試，回傳診斷報告"""
+    
+    # 1. 檢查 Token 是否有讀取到
+    token = os.environ.get('TELEGRAM_TOKEN')
+    token_status = "✅ 設定正常" if token else "❌ 未讀取到 (請檢查 Secrets)"
+    token_preview = f"{token[:5]}..." if token else "None"
+    
+    # 2. 測試 DNS 解析 (關鍵！你的錯誤 Log 顯示這裡掛了)
+    dns_status = "未知"
+    resolved_ip = "無"
+    try:
+        resolved_ip = socket.gethostbyname("api.telegram.org")
+        dns_status = "✅ DNS 解析成功"
+    except Exception as e:
+        dns_status = f"❌ DNS 解析失敗: {e}"
+
+    # 3. 測試實際 HTTP 連線
+    api_status = "未知"
+    api_response = "無"
+    if token:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+                api_status = f"✅ HTTP 連線成功 (Code: {resp.status_code})"
+                api_response = resp.json()
+        except Exception as e:
+            api_status = f"❌ HTTP 連線失敗: {e}"
+    
+    return {
+        "environment": {
+            "token_status": token_status,
+            "token_preview": token_preview,
+        },
+        "connectivity": {
+            "dns_check": dns_status,
+            "resolved_ip": resolved_ip,
+            "api_check": api_status,
+            "api_response": api_response
+        }
+    }
