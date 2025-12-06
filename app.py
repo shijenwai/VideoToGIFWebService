@@ -3,10 +3,12 @@ import logging
 import time
 import subprocess
 import asyncio
+import socket
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.request import HTTPXRequest
 
 # 設定日誌
 logging.basicConfig(
@@ -146,9 +148,23 @@ async def lifespan(app: FastAPI):
         logger.error("未設定 TELEGRAM_TOKEN 環境變數")
         yield
         return
+
+    # DNS 診斷
+    try:
+        ip = socket.gethostbyname("api.telegram.org")
+        logger.info(f"DNS 診斷: api.telegram.org 解析為 {ip}")
+    except Exception as e:
+        logger.error(f"DNS 診斷失敗: {e}")
     
-    # 建立 Application
-    ptb_application = Application.builder().token(token).build()
+    # 建立 Application，設定 HTTPXRequest
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        read_timeout=30,
+        write_timeout=30,
+        connect_timeout=30,
+        pool_timeout=30
+    )
+    ptb_application = Application.builder().token(token).request(request).build()
     
     # 註冊 Handler
     video_handler = MessageHandler(
