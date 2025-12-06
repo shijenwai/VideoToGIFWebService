@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 全域 Application 實例
-ptb_application: Application = None
+ptb_application: Application | None = None
 
 
 def generate_unique_filename(user_id: int, extension: str) -> str:
@@ -141,9 +141,15 @@ async def lifespan(app: FastAPI):
     
     token = os.environ.get('TELEGRAM_TOKEN')
     webhook_url = os.environ.get('WEBHOOK_URL')  # 例如: https://jw9494-video-to-gif-bot.hf.space/webhook
+    disable_bot = os.environ.get('DISABLE_TELEGRAM_BOT', '').lower() in {'1', 'true', 'yes'}
+
+    if disable_bot:
+        logger.warning("環境變數 DISABLE_TELEGRAM_BOT 已設定，跳過 Bot 初始化")
+        yield
+        return
     
     if not token:
-        logger.error("未設定 TELEGRAM_TOKEN 環境變數")
+        logger.warning("未設定 TELEGRAM_TOKEN 環境變數，跳過 Bot 初始化")
         yield
         return
     
@@ -159,21 +165,32 @@ async def lifespan(app: FastAPI):
     
     # 初始化並設定 Webhook
     max_retries = 3
+    startup_success = False
     for attempt in range(max_retries):
         try:
             await ptb_application.initialize()
             await ptb_application.start()
+            startup_success = True
             break
         except Exception as e:
             if attempt == max_retries - 1:
                 logger.error(f"Failed to initialize bot after {max_retries} attempts: {e}")
-                raise e
+                break
             logger.warning(f"Initialization failed (attempt {attempt + 1}/{max_retries}), retrying in 5 seconds: {e}")
             await asyncio.sleep(5)
+
+    if not startup_success:
+        logger.error("Bot 初始化失敗，將以無 Bot 模式啟動。請確認網路連線與 Token 設定。")
+        ptb_application = None
+        yield
+        return
     
     if webhook_url:
-        await ptb_application.bot.set_webhook(url=f"{webhook_url}/webhook")
-        logger.info(f"Webhook 已設定: {webhook_url}/webhook")
+        try:
+            await ptb_application.bot.set_webhook(url=f"{webhook_url}/webhook")
+            logger.info(f"Webhook 已設定: {webhook_url}/webhook")
+        except Exception as e:
+            logger.error(f"Webhook 設定失敗: {e}")
     else:
         logger.warning("未設定 WEBHOOK_URL，請手動設定 Webhook")
     
@@ -182,9 +199,10 @@ async def lifespan(app: FastAPI):
     yield
     
     # 關閉時清理
-    await ptb_application.stop()
-    await ptb_application.shutdown()
-    logger.info("Bot 已關閉")
+    if ptb_application:
+        await ptb_application.stop()
+        await ptb_application.shutdown()
+        logger.info("Bot 已關閉")
 
 
 # 建立 FastAPI 應用
@@ -194,7 +212,11 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/")
 async def root():
     """健康檢查端點"""
-    return {"status": "running", "message": "Video to GIF Bot is running"}
+    return {
+        "status": "running",
+        "message": "Video to GIF Bot is running",
+        "bot_initialized": ptb_application is not None
+    }
 
 
 @app.post("/webhook")

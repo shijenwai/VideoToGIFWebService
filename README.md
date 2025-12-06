@@ -31,6 +31,7 @@ pinned: false
 需要在 Hugging Face Space Settings → Repository secrets 設定：
 
 - `TELEGRAM_TOKEN`: 你的 Telegram Bot Token
+- `DISABLE_TELEGRAM_BOT` (可選): 設為 `1/true` 可在無法連線 Telegram（如建置流程、無網路環境）時跳過 Bot 初始化，僅啟動 HTTP 服務
 
 ## 技術架構
 
