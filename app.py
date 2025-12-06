@@ -5,7 +5,7 @@ import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 
 # 設定日誌
 logging.basicConfig(
@@ -80,6 +80,20 @@ async def download_video(file, file_path: str) -> bool:
         return False
 
 # --- 3. Bot 邏輯 ---
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """處理 /start 指令，回傳使用說明"""
+    welcome_text = (
+        "👋 嗨！我是影片轉 GIF 機器人\n\n"
+        "📖 使用方式：\n"
+        "直接傳送影片給我，我會自動轉換成 GIF 檔案回傳給你！\n\n"
+        "⚠️ 注意事項：\n"
+        "• 支援 MP4、MOV 等常見影片格式\n"
+        "• 建議影片長度在 30 秒內\n"
+        "• 輸出 GIF 會自動壓縮至 20MB 以下\n\n"
+        "🚀 現在就傳一個影片試試吧！"
+    )
+    await update.message.reply_text(welcome_text)
+
 async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     input_path = None
     output_path = None
@@ -129,6 +143,7 @@ if __name__ == '__main__':
 
     # B. 啟動 Bot (Polling)
     application = Application.builder().token(token).build()
+    application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
     
     logger.info("✅ Bot 已啟動 (Render Hybrid Mode)")
