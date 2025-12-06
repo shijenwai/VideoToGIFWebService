@@ -103,17 +103,22 @@ async def start_polling_bot():
         logger.error("❌ 未設定 TELEGRAM_TOKEN")
         return
 
-    application = Application.builder().token(token).build()
-    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
-
     retry_count = 0
     while True:
+        application = None # 初始化變數
         try:
             logger.info("⏳ Bot 正在背景嘗試連線 (Polling)...")
+            
+            # --- 關鍵修正：將 Application 建立移入迴圈內 ---
+            # 每次重試都產生一個全新的實例，避免上次失敗的髒狀態殘留
+            application = Application.builder().token(token).build()
+            application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
+            
             await application.initialize()
             await application.start()
             # Drop pending updates 避免重啟時處理舊訊息
             await application.updater.start_polling(drop_pending_updates=True)
+            
             logger.info("✅ Telegram Bot 連線成功！")
             
             # 保持運行
@@ -121,6 +126,13 @@ async def start_polling_bot():
                 await asyncio.sleep(3600)
                 
         except Exception as e:
+            # 如果建立過 application，嘗試安全關閉它
+            if application:
+                try:
+                    await application.shutdown()
+                except:
+                    pass
+            
             retry_count += 1
             wait_time = min(retry_count * 5, 60)
             logger.warning(f"⚠️ 連線失敗 ({retry_count}): {e}。等待 {wait_time} 秒後重試...")
