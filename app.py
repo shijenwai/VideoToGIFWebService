@@ -121,6 +121,7 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_document(
             document=open(output_path, 'rb'), 
             filename=f"video_{user_id}.gif",
+            disable_content_type_detection=True,
             read_timeout=60, write_timeout=60, connect_timeout=60
         )
         logger.info(f"User {user_id} 轉檔成功")
