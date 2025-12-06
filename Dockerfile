@@ -18,5 +18,5 @@ COPY app.py .
 # 暴露 Hugging Face Spaces 預設端口
 EXPOSE 7860
 
-# 使用 uvicorn 啟動 FastAPI (Webhook 模式)
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--loop", "asyncio"]
+# 使用 uvicorn 啟動
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]

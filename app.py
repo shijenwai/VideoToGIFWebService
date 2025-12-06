@@ -1,10 +1,9 @@
 import os
 import logging
-import time
-import subprocess
 import asyncio
+import subprocess
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
@@ -15,18 +14,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 全域 Application 實例
-ptb_application: Application | None = None
-
-
+# --- 工具函式區 (保持不變) ---
+import time
 def generate_unique_filename(user_id: int, extension: str) -> str:
-    """生成唯一檔名以避免多使用者同時使用時的檔案衝突"""
     timestamp = int(time.time() * 1000000)
     return f"user_{user_id}_{timestamp}.{extension}"
 
-
 def cleanup_files(*file_paths: str) -> None:
-    """清理暫存檔案"""
     for file_path in file_paths:
         if file_path and os.path.exists(file_path):
             try:
@@ -35,203 +29,112 @@ def cleanup_files(*file_paths: str) -> None:
             except Exception as e:
                 logger.error(f"刪除檔案失敗 {file_path}: {e}")
 
-
 def check_file_size(file_path: str, max_mb: int = 20) -> bool:
-    """檢查檔案大小是否超過限制"""
     if not os.path.exists(file_path):
         return False
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    logger.info(f"檔案大小: {file_size_mb:.2f} MB")
     return file_size_mb <= max_mb
 
-
 def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: int = 20) -> bool:
-    """使用漸進式 FPS 策略將影片轉換為 GIF"""
     fps_options = [20, 15, 10]
-    
     for fps in fps_options:
         logger.info(f"嘗試使用 {fps} FPS 轉檔...")
-        cmd = ['ffmpeg', '-i', input_path, '-vf', f'fps={fps}', '-y', output_path]
-        
+        # 注意: HF Free Tier CPU 較弱，增加 timeout 到 600秒
+        cmd = ['ffmpeg', '-i', input_path, '-vf', f'fps={fps},scale=320:-1:flags=lanczos', '-y', output_path]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if result.returncode != 0:
                 logger.error(f"FFmpeg 轉檔失敗 (FPS={fps}): {result.stderr}")
                 continue
-            
             if check_file_size(output_path, max_size_mb):
-                logger.info(f"轉檔成功！使用 {fps} FPS")
                 return True
             else:
-                logger.warning(f"GIF 檔案超過 {max_size_mb}MB，嘗試降低 FPS...")
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-        except subprocess.TimeoutExpired:
-            logger.error(f"FFmpeg 轉檔超時 (FPS={fps})")
+                if os.path.exists(output_path): os.remove(output_path)
         except Exception as e:
-            logger.error(f"FFmpeg 執行錯誤 (FPS={fps}): {e}")
-    
-    logger.error("所有 FPS 選項都無法產生符合大小限制的 GIF")
+            logger.error(f"FFmpeg 錯誤: {e}")
     return False
 
-
 async def download_video(file, file_path: str) -> bool:
-    """下載 Telegram 影片到指定路徑"""
     try:
         await file.download_to_drive(file_path)
-        logger.info(f"影片下載成功: {file_path}")
         return True
     except Exception as e:
-        logger.error(f"影片下載失敗: {e}")
+        logger.error(f"下載失敗: {e}")
         return False
 
-
 async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理使用者傳送的影片訊息，將影片轉換為 GIF 並回傳"""
     input_path = None
     output_path = None
-    
     try:
         user_id = update.effective_user.id
-        await update.message.reply_text("📹 收到影片！正在處理中，請稍候...")
+        await update.message.reply_text("📹 收到影片！轉檔中，HF 免費版運算較慢請稍候...")
         
-        if update.message.video:
-            video_file = await update.message.video.get_file()
-        elif update.message.document:
-            video_file = await update.message.document.get_file()
-        else:
-            await update.message.reply_text("❌ 無法識別的影片格式")
+        video = update.message.video or update.message.document
+        if not video:
+            await update.message.reply_text("❌ 格式錯誤")
             return
+
+        file = await video.get_file()
+        input_path = f"/tmp/{generate_unique_filename(user_id, 'mp4')}"
+        output_path = f"/tmp/{generate_unique_filename(user_id, 'gif')}"
         
-        input_filename = generate_unique_filename(user_id, "mp4")
-        output_filename = generate_unique_filename(user_id, "gif")
-        input_path = f"/tmp/{input_filename}"
-        output_path = f"/tmp/{output_filename}"
-        
-        if not await download_video(video_file, input_path):
-            await update.message.reply_text("❌ 影片下載失敗，請重試")
+        if not await download_video(file, input_path):
+            await update.message.reply_text("❌ 下載失敗")
             return
-        
-        await update.message.reply_text("🔄 正在轉換為 GIF...")
+            
         if not convert_to_gif_with_retry(input_path, output_path):
-            await update.message.reply_text("❌ 轉檔失敗，請確認影片格式或嘗試較短的影片")
+            await update.message.reply_text("❌ 轉檔失敗 (可能檔案太大或超時)")
             return
-        
-        if not check_file_size(output_path, 20):
-            await update.message.reply_text("❌ GIF 檔案超過 20MB 限制，請嘗試較短的影片")
-            return
-        
-        await update.message.reply_text("✅ 轉換完成！正在傳送...")
-        with open(output_path, 'rb') as gif_file:
-            await update.message.reply_document(document=gif_file, filename=f"video_{user_id}.gif")
-        
-        logger.info(f"成功為使用者 {user_id} 完成影片轉 GIF")
+
+        await update.message.reply_document(document=open(output_path, 'rb'), filename=f"video_{user_id}.gif")
+        logger.info(f"User {user_id} 轉檔成功")
+
     except Exception as e:
-        logger.exception("處理影片時發生未知錯誤")
-        await update.message.reply_text("❌ 發生未知錯誤，請稍後重試")
+        logger.exception("處理錯誤")
+        await update.message.reply_text("❌ 發生未知錯誤")
     finally:
         cleanup_files(input_path, output_path)
 
+# --- 核心修改：背景啟動器 ---
+async def start_polling_bot():
+    """在背景無限重試連線，直到成功"""
+    token = os.environ.get('TELEGRAM_TOKEN')
+    if not token:
+        logger.error("❌ 未設定 TELEGRAM_TOKEN")
+        return
 
+    application = Application.builder().token(token).build()
+    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
+
+    retry_count = 0
+    while True:
+        try:
+            logger.info("⏳ Bot 正在背景嘗試連線 (Polling)...")
+            await application.initialize()
+            await application.start()
+            # Drop pending updates 避免重啟時處理舊訊息
+            await application.updater.start_polling(drop_pending_updates=True)
+            logger.info("✅ Telegram Bot 連線成功！")
+            
+            # 保持運行
+            while True:
+                await asyncio.sleep(3600)
+                
+        except Exception as e:
+            retry_count += 1
+            wait_time = min(retry_count * 5, 60)
+            logger.warning(f"⚠️ 連線失敗 ({retry_count}): {e}。等待 {wait_time} 秒後重試...")
+            await asyncio.sleep(wait_time)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI 生命週期管理：啟動時初始化 Bot，關閉時清理"""
-    global ptb_application
-    
-    token = os.environ.get('TELEGRAM_TOKEN')
-    webhook_url = os.environ.get('WEBHOOK_URL')  # 例如: https://jw9494-video-to-gif-bot.hf.space/webhook
-    disable_bot = os.environ.get('DISABLE_TELEGRAM_BOT', '').lower() in {'1', 'true', 'yes'}
-
-    if disable_bot:
-        logger.warning("環境變數 DISABLE_TELEGRAM_BOT 已設定，跳過 Bot 初始化")
-        yield
-        return
-    
-    if not token:
-        logger.warning("未設定 TELEGRAM_TOKEN 環境變數，跳過 Bot 初始化")
-        yield
-        return
-    
-    # 建立 Application
-    ptb_application = Application.builder().token(token).build()
-    
-    # 註冊 Handler
-    video_handler = MessageHandler(
-        filters.VIDEO | filters.Document.VIDEO,
-        video_to_gif_handler
-    )
-    ptb_application.add_handler(video_handler)
-    
-    # 初始化並設定 Webhook
-    max_retries = 3
-    startup_success = False
-    for attempt in range(max_retries):
-        try:
-            await ptb_application.initialize()
-            await ptb_application.start()
-            startup_success = True
-            break
-        except Exception as e:
-            if attempt == max_retries - 1:
-                logger.error(f"Failed to initialize bot after {max_retries} attempts: {e}")
-                break
-            logger.warning(f"Initialization failed (attempt {attempt + 1}/{max_retries}), retrying in 5 seconds: {e}")
-            await asyncio.sleep(5)
-
-    if not startup_success:
-        logger.error("Bot 初始化失敗，將以無 Bot 模式啟動。請確認網路連線與 Token 設定。")
-        ptb_application = None
-        yield
-        return
-    
-    if webhook_url:
-        try:
-            await ptb_application.bot.set_webhook(url=f"{webhook_url}/webhook")
-            logger.info(f"Webhook 已設定: {webhook_url}/webhook")
-        except Exception as e:
-            logger.error(f"Webhook 設定失敗: {e}")
-    else:
-        logger.warning("未設定 WEBHOOK_URL，請手動設定 Webhook")
-    
-    logger.info("Bot 啟動完成 (Webhook 模式)")
-    
+    # 1. 啟動背景任務 (不會卡住 FastAPI 啟動)
+    asyncio.create_task(start_polling_bot())
     yield
-    
-    # 關閉時清理
-    if ptb_application:
-        await ptb_application.stop()
-        await ptb_application.shutdown()
-        logger.info("Bot 已關閉")
+    # 關閉邏輯 (HF 強制關閉時通常來不及執行，可忽略)
 
-
-# 建立 FastAPI 應用
 app = FastAPI(lifespan=lifespan)
 
-
 @app.get("/")
-async def root():
-    """健康檢查端點"""
-    return {
-        "status": "running",
-        "message": "Video to GIF Bot is running",
-        "bot_initialized": ptb_application is not None
-    }
-
-
-@app.post("/webhook")
-async def webhook(request: Request) -> Response:
-    """處理 Telegram Webhook 請求"""
-    global ptb_application
-    
-    if ptb_application is None:
-        return Response(status_code=503, content="Bot not initialized")
-    
-    try:
-        data = await request.json()
-        update = Update.de_json(data, ptb_application.bot)
-        await ptb_application.process_update(update)
-        return Response(status_code=200)
-    except Exception as e:
-        logger.exception(f"Webhook 處理錯誤: {e}")
-        return Response(status_code=500)
+def health_check():
+    return {"status": "alive", "mode": "polling"}
