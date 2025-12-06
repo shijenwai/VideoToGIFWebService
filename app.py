@@ -215,9 +215,10 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         cleanup_files(input_path, output_path)
 
 
-async def main() -> None:
+def main() -> None:
     """
     初始化並啟動 Telegram Bot
+    使用同步方式啟動，避免 event loop 衝突
     """
     # 從環境變數讀取 Token
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -237,10 +238,9 @@ async def main() -> None:
     
     logger.info("Bot 啟動中...")
     
-    # 啟動 Polling 模式
-    await application.run_polling()
+    # 使用同步方式啟動 Polling（內部會自己管理 event loop）
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    main()
