@@ -1,0 +1,5 @@
+# Hugging Face Spaces 系統依賴配置檔
+# 此檔案用於在 HF Spaces 建置環境時安裝系統級套件
+# 每行一個套件名稱，HF 會自動使用 apt-get 安裝
+
+ffmpeg
