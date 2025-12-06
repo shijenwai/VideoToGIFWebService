@@ -52,24 +52,66 @@ def check_file_size(file_path: str, max_mb: int = 20) -> bool:
     return (os.path.getsize(file_path) / (1024 * 1024)) <= max_mb
 
 def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: int = 20) -> bool:
-    # Render CPU 也不強，維持 320p + lanczos
-    fps_options = [15, 10] 
+    """
+    使用 FFmpeg 調色盤優化 (palettegen + paletteuse) 產生高品質小檔案 GIF
+    會依序嘗試不同 FPS 和解析度組合，直到檔案大小符合限制
+    """
+    # 嘗試不同的 FPS 和寬度組合 (從高品質到低品質)
+    configs = [
+        (15, 480),  # 高品質
+        (12, 400),
+        (10, 320),  # 中等
+        (8, 280),
+        (6, 240),   # 最小
+    ]
     
-    for fps in fps_options:
-        logger.info(f"嘗試使用 {fps} FPS 轉檔...")
-        # 轉檔超時設定為 300 秒
-        cmd = ['ffmpeg', '-i', input_path, '-vf', f'fps={fps},scale=320:-1:flags=lanczos', '-y', output_path]
+    palette_path = input_path.replace('.mp4', '_palette.png')
+    
+    for fps, width in configs:
+        logger.info(f"嘗試 FPS={fps}, 寬度={width}px 轉檔...")
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            # 階段 1: 產生最佳調色盤
+            filters = f"fps={fps},scale={width}:-1:flags=lanczos"
+            palette_cmd = [
+                'ffmpeg', '-i', input_path,
+                '-vf', f'{filters},palettegen=stats_mode=diff',
+                '-y', palette_path
+            ]
+            result = subprocess.run(palette_cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
+                logger.warning(f"調色盤產生失敗: {result.stderr}")
                 continue
             
+            # 階段 2: 使用調色盤輸出 GIF (dither=bayer 可進一步壓縮)
+            gif_cmd = [
+                'ffmpeg', '-i', input_path, '-i', palette_path,
+                '-lavfi', f'{filters} [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=5',
+                '-y', output_path
+            ]
+            result = subprocess.run(gif_cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                logger.warning(f"GIF 輸出失敗: {result.stderr}")
+                continue
+            
+            # 檢查檔案大小
             if check_file_size(output_path, max_size_mb):
+                logger.info(f"轉檔成功！檔案大小: {os.path.getsize(output_path) / (1024*1024):.2f} MB")
                 return True
             else:
-                if os.path.exists(output_path): os.remove(output_path)
+                size_mb = os.path.getsize(output_path) / (1024*1024)
+                logger.info(f"檔案過大 ({size_mb:.2f} MB)，嘗試更低品質...")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                    
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg 轉檔超時")
         except Exception as e:
             logger.error(f"FFmpeg 錯誤: {e}")
+        finally:
+            # 清理調色盤暫存檔
+            if os.path.exists(palette_path):
+                os.remove(palette_path)
+    
     return False
 
 async def download_video(file, file_path: str) -> bool:
