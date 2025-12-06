@@ -1,28 +1,21 @@
-# --- 關鍵修正：改用完整版 (移除 -slim) ---
-# 完整版包含完整的 Debian 網路工具與 DNS 解析庫
+# 使用完整版 Python (避免缺件)
 FROM python:3.10
 
-# 安裝 FFmpeg (Debian 基礎映像檔使用 apt-get)
+# 安裝 FFmpeg
 RUN apt-get update && \
     apt-get install -y ffmpeg && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# 設定工作目錄
 WORKDIR /app
 
-# 複製依賴檔案
+# 複製依賴
 COPY requirements.txt .
-COPY packages.txt .
-
-# 安裝 Python 依賴
+# Render 不一定需要 packages.txt，但留著無妨，主要是 requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 複製應用程式
+# 複製程式碼
 COPY app.py .
 
-# 暴露端口 (給 HF 健康檢查用)
-EXPOSE 7860
-
-# 啟動命令
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+# 直接執行 Python
+CMD ["python", "app.py"]

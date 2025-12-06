@@ -1,7 +1,2 @@
 python-telegram-bot>=20.0
-fastapi>=0.104.0
-uvicorn>=0.24.0
-# --- 關鍵修正 ---
-# 強制指定 httpx 和 httpcore 的版本，修復 HF Spaces 的 DNS 解析失敗問題
-httpx==0.27.0
-httpcore==1.0.4
+# Render 網路環境正常，不需要鎖定 httpx 版本，也不需要 fastapi/uvicorn

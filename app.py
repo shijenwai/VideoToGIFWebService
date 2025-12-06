@@ -1,9 +1,7 @@
 import os
 import logging
-import asyncio
 import subprocess
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
+import time
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
@@ -15,7 +13,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- 工具函式區 (保持不變) ---
-import time
 def generate_unique_filename(user_id: int, extension: str) -> str:
     timestamp = int(time.time() * 1000000)
     return f"user_{user_id}_{timestamp}.{extension}"
@@ -36,16 +33,19 @@ def check_file_size(file_path: str, max_mb: int = 20) -> bool:
     return file_size_mb <= max_mb
 
 def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: int = 20) -> bool:
-    fps_options = [20, 15, 10]
+    # Render 免費版 CPU 也不強，維持 320p + lanczos 是好選擇
+    fps_options = [15, 10] 
+    
     for fps in fps_options:
         logger.info(f"嘗試使用 {fps} FPS 轉檔...")
-        # 注意: HF Free Tier CPU 較弱，增加 timeout 到 600秒
         cmd = ['ffmpeg', '-i', input_path, '-vf', f'fps={fps},scale=320:-1:flags=lanczos', '-y', output_path]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            # Render 不會像 HF 那樣亂殺 Process，但設個 Timeout 是好習慣
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
                 logger.error(f"FFmpeg 轉檔失敗 (FPS={fps}): {result.stderr}")
                 continue
+            
             if check_file_size(output_path, max_size_mb):
                 return True
             else:
@@ -62,12 +62,13 @@ async def download_video(file, file_path: str) -> bool:
         logger.error(f"下載失敗: {e}")
         return False
 
+# --- Bot 處理邏輯 ---
 async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     input_path = None
     output_path = None
     try:
         user_id = update.effective_user.id
-        await update.message.reply_text("📹 收到影片！轉檔中，HF 免費版運算較慢請稍候...")
+        await update.message.reply_text("📹 收到影片！Render 機器人正在為您轉檔中...")
         
         video = update.message.video or update.message.document
         if not video:
@@ -83,10 +84,16 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             return
             
         if not convert_to_gif_with_retry(input_path, output_path):
-            await update.message.reply_text("❌ 轉檔失敗 (可能檔案太大或超時)")
+            await update.message.reply_text("❌ 轉檔失敗")
             return
 
-        await update.message.reply_document(document=open(output_path, 'rb'), filename=f"video_{user_id}.gif")
+        await update.message.reply_document(
+            document=open(output_path, 'rb'), 
+            filename=f"video_{user_id}.gif",
+            read_timeout=60, 
+            write_timeout=60, 
+            connect_timeout=60
+        )
         logger.info(f"User {user_id} 轉檔成功")
 
     except Exception as e:
@@ -95,106 +102,16 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     finally:
         cleanup_files(input_path, output_path)
 
-# --- 核心修改：背景啟動器 ---
-async def start_polling_bot():
-    """在背景無限重試連線，直到成功"""
+if __name__ == '__main__':
+    # 讀取 Token
     token = os.environ.get('TELEGRAM_TOKEN')
     if not token:
-        logger.error("❌ 未設定 TELEGRAM_TOKEN")
-        return
+        logger.critical("未設定 TELEGRAM_TOKEN，程式終止")
+        exit(1)
 
-    retry_count = 0
-    while True:
-        application = None # 初始化變數
-        try:
-            logger.info("⏳ Bot 正在背景嘗試連線 (Polling)...")
-            
-            # --- 關鍵修正：將 Application 建立移入迴圈內 ---
-            # 每次重試都產生一個全新的實例，避免上次失敗的髒狀態殘留
-            application = Application.builder().token(token).build()
-            application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
-            
-            await application.initialize()
-            await application.start()
-            # Drop pending updates 避免重啟時處理舊訊息
-            await application.updater.start_polling(drop_pending_updates=True)
-            
-            logger.info("✅ Telegram Bot 連線成功！")
-            
-            # 保持運行
-            while True:
-                await asyncio.sleep(3600)
-                
-        except Exception as e:
-            # 如果建立過 application，嘗試安全關閉它
-            if application:
-                try:
-                    await application.shutdown()
-                except:
-                    pass
-            
-            retry_count += 1
-            wait_time = min(retry_count * 5, 60)
-            logger.warning(f"⚠️ 連線失敗 ({retry_count}): {e}。等待 {wait_time} 秒後重試...")
-            await asyncio.sleep(wait_time)
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 1. 啟動背景任務 (不會卡住 FastAPI 啟動)
-    asyncio.create_task(start_polling_bot())
-    yield
-    # 關閉邏輯 (HF 強制關閉時通常來不及執行，可忽略)
-
-app = FastAPI(lifespan=lifespan)
-
-@app.get("/")
-def health_check():
-    return {"status": "alive", "mode": "polling"}
-
-
-# --- 新增：診斷儀表板 (Doctor Endpoint) ---
-import socket
-import httpx
-
-@app.get("/debug")
-async def debug_connectivity():
-    """手動觸發連線測試，回傳診斷報告"""
+    # 建立與啟動 Bot (最簡潔的 Polling 寫法)
+    application = Application.builder().token(token).build()
+    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
     
-    # 1. 檢查 Token 是否有讀取到
-    token = os.environ.get('TELEGRAM_TOKEN')
-    token_status = "✅ 設定正常" if token else "❌ 未讀取到 (請檢查 Secrets)"
-    token_preview = f"{token[:5]}..." if token else "None"
-    
-    # 2. 測試 DNS 解析 (關鍵！你的錯誤 Log 顯示這裡掛了)
-    dns_status = "未知"
-    resolved_ip = "無"
-    try:
-        resolved_ip = socket.gethostbyname("api.telegram.org")
-        dns_status = "✅ DNS 解析成功"
-    except Exception as e:
-        dns_status = f"❌ DNS 解析失敗: {e}"
-
-    # 3. 測試實際 HTTP 連線
-    api_status = "未知"
-    api_response = "無"
-    if token:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
-                api_status = f"✅ HTTP 連線成功 (Code: {resp.status_code})"
-                api_response = resp.json()
-        except Exception as e:
-            api_status = f"❌ HTTP 連線失敗: {e}"
-    
-    return {
-        "environment": {
-            "token_status": token_status,
-            "token_preview": token_preview,
-        },
-        "connectivity": {
-            "dns_check": dns_status,
-            "resolved_ip": resolved_ip,
-            "api_check": api_status,
-            "api_response": api_response
-        }
-    }
+    logger.info("✅ Bot 已啟動 (Render Polling Mode)")
+    application.run_polling()
