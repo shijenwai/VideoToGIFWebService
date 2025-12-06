@@ -215,11 +215,44 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         cleanup_files(input_path, output_path)
 
 
+def wait_for_network(max_retries: int = 10, delay: int = 5) -> bool:
+    """
+    等待網路連線就緒（針對 Hugging Face Spaces 容器啟動延遲）
+    
+    Args:
+        max_retries: 最大重試次數
+        delay: 每次重試間隔秒數
+    
+    Returns:
+        True 表示網路就緒，False 表示超時
+    """
+    import socket
+    
+    for attempt in range(max_retries):
+        try:
+            # 嘗試解析 Telegram API 域名
+            socket.getaddrinfo('api.telegram.org', 443)
+            logger.info("網路連線就緒")
+            return True
+        except socket.gaierror:
+            logger.warning(f"等待網路連線... ({attempt + 1}/{max_retries})")
+            time.sleep(delay)
+    
+    logger.error("網路連線超時")
+    return False
+
+
 def main() -> None:
     """
     初始化並啟動 Telegram Bot
     使用同步方式啟動，避免 event loop 衝突
     """
+    # 等待網路就緒（Hugging Face Spaces 容器啟動需要時間）
+    logger.info("等待網路初始化...")
+    if not wait_for_network():
+        logger.error("無法建立網路連線，Bot 啟動失敗")
+        return
+    
     # 從環境變數讀取 Token
     token = os.environ.get('TELEGRAM_TOKEN')
     if not token:
