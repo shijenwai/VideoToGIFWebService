@@ -185,19 +185,35 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     output_path = None
     try:
         user_id = update.effective_user.id
-        await update.message.reply_text("📹 收到影片！Render 機器人正在為您轉檔中...")
         
         video = update.message.video or update.message.document
         if not video:
-            await update.message.reply_text("❌ 格式錯誤")
+            await update.message.reply_text("❌ 格式錯誤：請傳送影片檔案")
             return
+        
+        # 檢查檔案大小 (Telegram Bot API 限制 20MB 下載)
+        file_size_mb = video.file_size / (1024 * 1024) if video.file_size else 0
+        if file_size_mb > 20:
+            await update.message.reply_text(
+                f"❌ 檔案過大 ({file_size_mb:.1f} MB)\n\n"
+                "Telegram Bot API 限制最大 20MB，請先壓縮或裁剪影片後再試。"
+            )
+            return
+        
+        await update.message.reply_text("📹 收到影片！正在為您轉檔中...")
 
-        file = await video.get_file()
+        try:
+            file = await video.get_file()
+        except Exception as e:
+            logger.error(f"取得檔案失敗: {e}")
+            await update.message.reply_text("❌ 無法取得檔案，請稍後再試")
+            return
+            
         input_path = f"/tmp/{generate_unique_filename(user_id, 'mp4')}"
         output_path = f"/tmp/{generate_unique_filename(user_id, 'gif')}"
         
         if not await download_video(file, input_path):
-            await update.message.reply_text("❌ 下載失敗")
+            await update.message.reply_text("❌ 下載失敗，請稍後再試")
             return
         
         # 在執行緒池中執行阻塞的轉檔操作，避免卡住 event loop
@@ -207,7 +223,11 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         
         if not success:
-            await update.message.reply_text("❌ 轉檔失敗 (檔案過大或超時)")
+            await update.message.reply_text(
+                "❌ 轉檔失敗\n\n"
+                "可能原因：影片太長導致 GIF 超過 20MB 限制。\n"
+                "建議：請裁剪影片至 30 秒內再試。"
+            )
             return
 
         await update.message.reply_document(
@@ -220,7 +240,7 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     except Exception as e:
         logger.exception("處理錯誤")
-        await update.message.reply_text("❌ 發生未知錯誤")
+        await update.message.reply_text("❌ 發生未知錯誤，請稍後再試")
     finally:
         cleanup_files(input_path, output_path)
 
