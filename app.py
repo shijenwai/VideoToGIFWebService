@@ -51,10 +51,46 @@ def check_file_size(file_path: str, max_mb: int = 20) -> bool:
         return False
     return (os.path.getsize(file_path) / (1024 * 1024)) <= max_mb
 
+def get_video_duration(input_path: str) -> float:
+    """使用 FFprobe 取得影片時長 (秒)"""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            input_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except Exception as e:
+        logger.warning(f"無法取得影片時長: {e}")
+    return 0
+
+def estimate_start_config(duration: float, file_size_mb: float) -> int:
+    """
+    根據影片時長和檔案大小，估算應該從哪個配置開始
+    回傳 configs 陣列的起始索引
+    """
+    # 經驗公式：GIF 大小 ≈ 時長(秒) × FPS × 寬度² × 0.00001 (粗估)
+    # 簡化判斷：用「時長 × 原始大小」作為複雜度指標
+    complexity = duration * file_size_mb
+    
+    if complexity > 3000:      # 超長/超大影片 (如 2分鐘 × 30MB)
+        return 4               # 直接從最低品質開始
+    elif complexity > 1500:    # 長影片 (如 1分鐘 × 20MB)
+        return 3
+    elif complexity > 600:     # 中等影片 (如 30秒 × 20MB)
+        return 2
+    elif complexity > 200:     # 短影片 (如 15秒 × 15MB)
+        return 1
+    else:                      # 很短的影片
+        return 0               # 從最高品質開始
+
 def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: int = 20) -> bool:
     """
     使用 FFmpeg 調色盤優化 (palettegen + paletteuse) 產生高品質小檔案 GIF
-    會依序嘗試不同 FPS 和解析度組合，直到檔案大小符合限制
+    會根據影片時長智慧選擇起始配置，減少不必要的嘗試
     """
     # 嘗試不同的 FPS 和寬度組合 (從高品質到低品質)
     configs = [
@@ -65,9 +101,16 @@ def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: in
         (6, 240),   # 最小
     ]
     
+    # 智慧選擇起始配置
+    duration = get_video_duration(input_path)
+    file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
+    start_idx = estimate_start_config(duration, file_size_mb)
+    
+    logger.info(f"影片分析: 時長={duration:.1f}秒, 大小={file_size_mb:.1f}MB, 從配置 {start_idx} 開始")
+    
     palette_path = input_path.replace('.mp4', '_palette.png')
     
-    for fps, width in configs:
+    for fps, width in configs[start_idx:]:
         logger.info(f"嘗試 FPS={fps}, 寬度={width}px 轉檔...")
         try:
             # 階段 1: 產生最佳調色盤
