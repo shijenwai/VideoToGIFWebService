@@ -235,7 +235,8 @@ if __name__ == '__main__':
     threading.Thread(target=start_dummy_server, daemon=True).start()
 
     # B. 啟動 Bot (Polling)
-    application = Application.builder().token(token).build()
+    # concurrent_updates=True 允許同時處理多個訊息，不會互相阻塞
+    application = Application.builder().token(token).concurrent_updates(True).build()
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
     
