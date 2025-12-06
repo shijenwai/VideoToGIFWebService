@@ -19,4 +19,4 @@ COPY app.py .
 EXPOSE 7860
 
 # 使用 uvicorn 啟動 FastAPI (Webhook 模式)
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--loop", "asyncio"]

@@ -158,8 +158,18 @@ async def lifespan(app: FastAPI):
     ptb_application.add_handler(video_handler)
     
     # 初始化並設定 Webhook
-    await ptb_application.initialize()
-    await ptb_application.start()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            await ptb_application.initialize()
+            await ptb_application.start()
+            break
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Failed to initialize bot after {max_retries} attempts: {e}")
+                raise e
+            logger.warning(f"Initialization failed (attempt {attempt + 1}/{max_retries}), retrying in 5 seconds: {e}")
+            await asyncio.sleep(5)
     
     if webhook_url:
         await ptb_application.bot.set_webhook(url=f"{webhook_url}/webhook")
