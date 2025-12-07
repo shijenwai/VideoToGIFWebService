@@ -196,7 +196,8 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if file_size_mb > 20:
             await update.message.reply_text(
                 f"❌ 檔案過大 ({file_size_mb:.1f} MB)\n\n"
-                "Telegram Bot API 限制最大 20MB，請先壓縮或裁剪影片後再試。"
+                "Telegram Bot API 限制最大 20MB。\n"
+                "💡 提示：傳送影片時可選擇較低畫質來縮小檔案。"
             )
             return
         
@@ -226,7 +227,7 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(
                 "❌ 轉檔失敗\n\n"
                 "可能原因：影片太長導致 GIF 超過 20MB 限制。\n"
-                "建議：請裁剪影片至 30 秒內再試。"
+                "💡 建議：使用較短的影片片段（約 15-30 秒內效果最佳）"
             )
             return
 
