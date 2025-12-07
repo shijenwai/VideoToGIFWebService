@@ -302,7 +302,7 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                             document=gif_file, 
                             filename=f"video_{user_id}.gif",
                             disable_content_type_detection=True,
-                            read_timeout=120, write_timeout=120, connect_timeout=60
+                            read_timeout=180, write_timeout=180, connect_timeout=60
                         )
                     logger.info(f"User {user_id} 轉檔成功")
                     break
