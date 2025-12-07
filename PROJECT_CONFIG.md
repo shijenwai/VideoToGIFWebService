@@ -8,6 +8,13 @@
 - **專案描述**: 將 Telegram 影片轉換為 GIF 的機器人，部署於 Render
 - **技術棧**: Python 3.10+, python-telegram-bot, FFmpeg
 
+## 專案特定注意事項
+
+- 此專案使用 async/await 模式 (python-telegram-bot v20+)
+- FFmpeg 命令需在 `run_in_executor` 中執行以避免阻塞
+- 暫存檔案需確保清理 (使用 try/finally)
+- 並發控制透過 `MAX_CONCURRENT` 環境變數調整
+
 ## 環境資訊
 
 - **開發環境**: 本地執行 `python app.py`
@@ -16,9 +23,27 @@
 
 ### 環境變數
 
-| 變數名稱 | 說明 |
-|---------|------|
-| `TELEGRAM_TOKEN` | Telegram Bot Token (從 @BotFather 取得) |
+| 變數名稱 | 說明 | 預設值 |
+|---------|------|--------|
+| `TELEGRAM_TOKEN` | Telegram Bot Token (從 @BotFather 取得) | 必填 |
+| `MAX_CONCURRENT` | 同時處理的轉檔任務數量 | `1` |
+
+### 部署環境
+
+- **平台**: Render.com 免費方案
+- **資源限制**: 0.1 CPU / 512MB RAM
+- **預設並發**: `MAX_CONCURRENT=1`（完全排隊模式）
+
+### 並發配置建議
+
+| 伺服器規格 | MAX_CONCURRENT | 說明 |
+|-----------|----------------|------|
+| 0.1 CPU / 512MB | `1` | 完全排隊（Render 免費方案） |
+| 0.5 CPU / 1GB | `2` | 輕度並發 |
+| 1 CPU / 2GB | `3-4` | 中度並發 |
+| 2+ CPU / 4GB+ | `5-8` | 高並發 |
+
+詳細說明請參考 `docs/CONCURRENCY_CONFIG.md`
 
 ## 常用命令
 

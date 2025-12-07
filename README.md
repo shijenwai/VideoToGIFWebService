@@ -8,7 +8,7 @@
 - 🎨 調色盤優化 (palettegen + paletteuse) 產生高品質小檔案
 - ⚡ 智慧配置選擇：根據影片時長自動選擇最佳轉檔參數
 - 📦 自動控制輸出檔案大小 ≤ 20MB
-- 🔄 支援同時處理多個請求 (concurrent updates)
+- 🔄 智慧排隊機制：可動態調整並發數，保護伺服器資源
 - 🧹 自動清理暫存檔案
 
 ## 使用方式
@@ -30,9 +30,21 @@
 
 在 Render Dashboard → Environment 設定：
 
-| 變數名稱 | 說明 |
-|---------|------|
-| `TELEGRAM_TOKEN` | Telegram Bot Token (從 @BotFather 取得) |
+| 變數名稱 | 說明 | 預設值 |
+|---------|------|--------|
+| `TELEGRAM_TOKEN` | Telegram Bot Token (從 @BotFather 取得) | 必填 |
+| `MAX_CONCURRENT` | 同時處理的轉檔任務數量 | `1` |
+
+#### MAX_CONCURRENT 配置建議
+
+| 伺服器規格 | 建議值 | 說明 |
+|-----------|--------|------|
+| 0.1 CPU / 512MB | `1` | 完全排隊（Render 免費方案） |
+| 0.5 CPU / 1GB | `2` | 輕度並發 |
+| 1 CPU / 2GB | `3-4` | 中度並發 |
+| 2+ CPU / 4GB+ | `5-8` | 高並發 |
+
+詳細說明請參考 `docs/CONCURRENCY_CONFIG.md`
 
 ### 架構說明
 
