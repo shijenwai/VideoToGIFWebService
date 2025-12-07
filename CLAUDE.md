@@ -23,12 +23,6 @@
 - 使用 TodoWrite 工具追蹤任務進度
 - 複雜任務使用 Task 工具委派給專門 Agent
 
-### 專案特定注意事項
-
-- 此專案使用 async/await 模式 (python-telegram-bot v20+)
-- FFmpeg 命令需在 `run_in_executor` 中執行以避免阻塞
-- 暫存檔案需確保清理 (使用 try/finally)
-
 ---
 
 **提醒**: AI 輔助開發需要人工驗證和批判性思維確保品質

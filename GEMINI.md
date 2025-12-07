@@ -12,11 +12,7 @@
 
 ## Gemini 專屬設定
 
-### 專案特定注意事項
-
-- 此專案使用 async/await 模式 (python-telegram-bot v20+)
-- FFmpeg 命令需在 `run_in_executor` 中執行以避免阻塞
-- 暫存檔案需確保清理 (使用 try/finally)
+（目前無 Gemini 專屬設定，請參考 PROJECT_CONFIG.md）
 
 ---
 
