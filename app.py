@@ -15,6 +15,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 動態並發控制：透過環境變數調整同時處理數量
+# MAX_CONCURRENT=1 → 完全排隊（適合 0.1 CPU / 512MB）
+# MAX_CONCURRENT=2-3 → 輕度並發（適合 0.5 CPU / 1GB）
+# MAX_CONCURRENT=5+ → 高並發（適合 1+ CPU / 2GB+）
+MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT', '1'))
+processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+logger.info(f"🔧 並發控制：最多同時處理 {MAX_CONCURRENT} 個轉檔任務")
+
 # --- 1. 極簡假網頁伺服器 (用來騙過 Render 的健康檢查) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -182,13 +190,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     input_path = None
     output_path = None
-    try:
-        user_id = update.effective_user.id
-        
-        video = update.message.video or update.message.document
-        if not video:
-            await update.message.reply_text("❌ 格式錯誤：請傳送影片檔案")
-            return
+    
+    # 排隊機制：超過並發限制時會在此等待
+    async with processing_semaphore:
+        try:
+            user_id = update.effective_user.id
+            
+            video = update.message.video or update.message.document
+            if not video:
+                await update.message.reply_text("❌ 格式錯誤：請傳送影片檔案")
+                return
         
         # 檢查檔案大小 (Telegram Bot API 限制 20MB 下載)
         file_size_mb = video.file_size / (1024 * 1024) if video.file_size else 0
@@ -230,19 +241,19 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        await update.message.reply_document(
-            document=open(output_path, 'rb'), 
-            filename=f"video_{user_id}.gif",
-            disable_content_type_detection=True,
-            read_timeout=60, write_timeout=60, connect_timeout=60
-        )
-        logger.info(f"User {user_id} 轉檔成功")
+            await update.message.reply_document(
+                document=open(output_path, 'rb'), 
+                filename=f"video_{user_id}.gif",
+                disable_content_type_detection=True,
+                read_timeout=60, write_timeout=60, connect_timeout=60
+            )
+            logger.info(f"User {user_id} 轉檔成功")
 
-    except Exception as e:
-        logger.exception("處理錯誤")
-        await update.message.reply_text("❌ 發生未知錯誤，請稍後再試")
-    finally:
-        cleanup_files(input_path, output_path)
+        except Exception as e:
+            logger.exception("處理錯誤")
+            await update.message.reply_text("❌ 發生未知錯誤，請稍後再試")
+        finally:
+            cleanup_files(input_path, output_path)
 
 if __name__ == '__main__':
     # 讀取 Token
