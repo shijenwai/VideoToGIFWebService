@@ -23,6 +23,38 @@ MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT', '1'))
 processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 logger.info(f"🔧 並發控制：最多同時處理 {MAX_CONCURRENT} 個轉檔任務")
 
+# 排隊追蹤器：記錄等待中的任務數量
+class QueueTracker:
+    def __init__(self):
+        self._lock = asyncio.Lock()
+        self._waiting_count = 0  # 等待中的任務數
+        self._processing_count = 0  # 處理中的任務數
+    
+    async def join_queue(self) -> int:
+        """加入排隊，回傳前面等待的人數"""
+        async with self._lock:
+            position = self._waiting_count + self._processing_count
+            self._waiting_count += 1
+            return position
+    
+    async def start_processing(self):
+        """從等待轉為處理中"""
+        async with self._lock:
+            self._waiting_count -= 1
+            self._processing_count += 1
+    
+    async def finish_processing(self):
+        """完成處理"""
+        async with self._lock:
+            self._processing_count -= 1
+    
+    async def get_queue_status(self) -> tuple[int, int]:
+        """取得目前狀態 (等待中, 處理中)"""
+        async with self._lock:
+            return self._waiting_count, self._processing_count
+
+queue_tracker = QueueTracker()
+
 # --- 1. 極簡假網頁伺服器 (用來騙過 Render 的健康檢查) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -190,56 +222,76 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     input_path = None
     output_path = None
+    user_id = update.effective_user.id
+    
+    video = update.message.video or update.message.document
+    if not video:
+        await update.message.reply_text("❌ 格式錯誤：請傳送影片檔案")
+        return
+    
+    # 檢查檔案大小 (Telegram Bot API 限制 20MB 下載)
+    file_size_mb = video.file_size / (1024 * 1024) if video.file_size else 0
+    if file_size_mb > 20:
+        await update.message.reply_text(
+            f"❌ 檔案過大 ({file_size_mb:.1f} MB)\n\n"
+            "Telegram Bot API 限制最大 20MB。\n"
+            "💡 提示：傳送影片時可選擇較低畫質來縮小檔案。"
+        )
+        return
+    
+    # 取得影片檔名（用於訊息顯示）
+    video_name = video.file_name or "未命名影片"
+    
+    # 加入排隊並取得前面等待人數
+    position = await queue_tracker.join_queue()
+    
+    if position > 0:
+        await update.message.reply_text(
+            f"📹 收到影片！\n"
+            f"📁 {video_name}\n\n"
+            f"⏳ 目前排隊中，前面還有 {position} 個任務\n"
+            f"請稍候，輪到您時會自動開始轉檔..."
+        )
+    else:
+        await update.message.reply_text(f"📹 收到影片「{video_name}」！正在為您轉檔中...")
     
     # 排隊機制：超過並發限制時會在此等待
     async with processing_semaphore:
-        try:
-            user_id = update.effective_user.id
-            
-            video = update.message.video or update.message.document
-            if not video:
-                await update.message.reply_text("❌ 格式錯誤：請傳送影片檔案")
-                return
+        await queue_tracker.start_processing()
         
-        # 檢查檔案大小 (Telegram Bot API 限制 20MB 下載)
-        file_size_mb = video.file_size / (1024 * 1024) if video.file_size else 0
-        if file_size_mb > 20:
-            await update.message.reply_text(
-                f"❌ 檔案過大 ({file_size_mb:.1f} MB)\n\n"
-                "Telegram Bot API 限制最大 20MB。\n"
-                "💡 提示：傳送影片時可選擇較低畫質來縮小檔案。"
-            )
-            return
+        # 如果有排隊，通知使用者已開始處理
+        if position > 0:
+            await update.message.reply_text(f"🚀 輪到您了！正在轉檔「{video_name}」...")
         
-        await update.message.reply_text("📹 收到影片！正在為您轉檔中...")
-
         try:
             file = await video.get_file()
         except Exception as e:
             logger.error(f"取得檔案失敗: {e}")
             await update.message.reply_text("❌ 無法取得檔案，請稍後再試")
+            await queue_tracker.finish_processing()
             return
             
         input_path = f"/tmp/{generate_unique_filename(user_id, 'mp4')}"
         output_path = f"/tmp/{generate_unique_filename(user_id, 'gif')}"
         
-        if not await download_video(file, input_path):
-            await update.message.reply_text("❌ 下載失敗，請稍後再試")
-            return
-        
-        # 在執行緒池中執行阻塞的轉檔操作，避免卡住 event loop
-        loop = asyncio.get_event_loop()
-        success = await loop.run_in_executor(
-            None, convert_to_gif_with_retry, input_path, output_path
-        )
-        
-        if not success:
-            await update.message.reply_text(
-                "❌ 轉檔失敗\n\n"
-                "可能原因：影片太長導致 GIF 超過 20MB 限制。\n"
-                "💡 建議：使用較短的影片片段（約 15-30 秒內效果最佳）"
+        try:
+            if not await download_video(file, input_path):
+                await update.message.reply_text("❌ 下載失敗，請稍後再試")
+                return
+            
+            # 在執行緒池中執行阻塞的轉檔操作，避免卡住 event loop
+            loop = asyncio.get_event_loop()
+            success = await loop.run_in_executor(
+                None, convert_to_gif_with_retry, input_path, output_path
             )
-            return
+            
+            if not success:
+                await update.message.reply_text(
+                    "❌ 轉檔失敗\n\n"
+                    "可能原因：影片太長導致 GIF 超過 20MB 限制。\n"
+                    "💡 建議：使用較短的影片片段（約 15-30 秒內效果最佳）"
+                )
+                return
 
             await update.message.reply_document(
                 document=open(output_path, 'rb'), 
@@ -254,6 +306,7 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("❌ 發生未知錯誤，請稍後再試")
         finally:
             cleanup_files(input_path, output_path)
+            await queue_tracker.finish_processing()
 
 if __name__ == '__main__':
     # 讀取 Token
