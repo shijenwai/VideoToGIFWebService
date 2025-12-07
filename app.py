@@ -173,9 +173,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "📖 使用方式：\n"
         "直接傳送影片給我，我會自動轉換成 GIF 檔案回傳給你！\n\n"
         "⚠️ 注意事項：\n"
-        "• 支援 MP4、MOV 等常見影片格式\n"
-        "• 建議影片長度在 30 秒內\n"
-        "• 輸出 GIF 會自動壓縮至 20MB 以下\n\n"
+        "• 檔案大小限制 20MB（超過會提示如何處理）\n"
+        "• 輸出 GIF 會自動優化品質與檔案大小\n\n"
         "🚀 現在就傳一個影片試試吧！"
     )
     await update.message.reply_text(welcome_text)
