@@ -63,6 +63,12 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
     
+    def do_HEAD(self):
+        """處理 UptimeRobot 的 HEAD 請求"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+    
     # 關閉 Log 避免洗版
     def log_message(self, format, *args):
         pass
