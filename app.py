@@ -293,13 +293,25 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
                 return
 
-            await update.message.reply_document(
-                document=open(output_path, 'rb'), 
-                filename=f"video_{user_id}.gif",
-                disable_content_type_detection=True,
-                read_timeout=60, write_timeout=60, connect_timeout=60
-            )
-            logger.info(f"User {user_id} 轉檔成功")
+            # 上傳 GIF，大檔案需要更長 timeout，加入重試機制
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    with open(output_path, 'rb') as gif_file:
+                        await update.message.reply_document(
+                            document=gif_file, 
+                            filename=f"video_{user_id}.gif",
+                            disable_content_type_detection=True,
+                            read_timeout=120, write_timeout=120, connect_timeout=60
+                        )
+                    logger.info(f"User {user_id} 轉檔成功")
+                    break
+                except Exception as upload_err:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"上傳失敗 (嘗試 {attempt + 1}/{max_retries}): {upload_err}")
+                        await asyncio.sleep(2)  # 等待 2 秒後重試
+                    else:
+                        raise upload_err
 
         except Exception as e:
             logger.exception("處理錯誤")
