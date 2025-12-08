@@ -5,7 +5,7 @@
 ## 專案資訊
 
 - **專案名稱**: Video to GIF Telegram Bot
-- **專案描述**: 將 Telegram 影片轉換為 GIF 的機器人，部署於 Render
+- **專案描述**: 將 Telegram 影片轉換為 GIF 的機器人，支援 Render 與 Google Cloud Run 部署
 - **技術棧**: Python 3.10+, python-telegram-bot, FFmpeg
 
 ## 專案特定注意事項
@@ -14,25 +14,49 @@
 - FFmpeg 命令需在 `run_in_executor` 中執行以避免阻塞
 - 暫存檔案需確保清理 (使用 try/finally)
 - 並發控制透過 `MAX_CONCURRENT` 環境變數調整
+- **Webhook 模式下，FFmpeg timeout 為 50 秒**（Fail Fast 機制，避免 Telegram 60 秒限制觸發重試風暴）
 
-## 環境資訊
+## 執行模式
 
-- **開發環境**: 本地執行 `python app.py`
-- **部署平台**: Render (Free Tier)
-- **執行模式**: Hybrid Mode (Polling + HTTP Health Check)
+本專案支援兩種執行模式，透過 `RUN_MODE` 環境變數切換：
 
-### 環境變數
+### Polling 模式（預設，適用 Render）
+- **模式**: Long Polling + HTTP Health Check Server
+- **適用場景**: Render 免費方案、本地開發
+- **FFmpeg Timeout**: 300 秒
 
-| 變數名稱 | 說明 | 預設值 |
-|---------|------|--------|
-| `TELEGRAM_TOKEN` | Telegram Bot Token (從 @BotFather 取得) | 必填 |
-| `MAX_CONCURRENT` | 同時處理的轉檔任務數量 | `1` |
+### Webhook 模式（適用 Cloud Run）
+- **模式**: HTTP Webhook Server（Serverless）
+- **適用場景**: Google Cloud Run、支援 Scale-to-Zero
+- **FFmpeg Timeout**: 50 秒（Fail Fast 機制）
+- **額外需求**: 需設定 `WEBHOOK_URL` 環境變數
 
-### 部署環境
+## 環境變數
 
+| 變數名稱 | 說明 | 預設值 | 備註 |
+|---------|------|--------|------|
+| `TELEGRAM_TOKEN` | Telegram Bot Token | 必填 | 從 @BotFather 取得 |
+| `RUN_MODE` | 執行模式 | `polling` | `polling` 或 `webhook` |
+| `PORT` | 監聽埠號 | `10000`(Polling) / `8080`(Webhook) | Cloud Run 自動注入 |
+| `WEBHOOK_URL` | Webhook 完整 URL | - | Webhook 模式必填，如 `https://xxx.run.app` |
+| `MAX_CONCURRENT` | 同時處理任務數 | `1` | 依資源調整 |
+
+## 部署配置
+
+### Render 部署（Polling 模式）
 - **平台**: Render.com 免費方案
 - **資源限制**: 0.1 CPU / 512MB RAM
 - **預設並發**: `MAX_CONCURRENT=1`（完全排隊模式）
+- **環境變數**: `TELEGRAM_TOKEN`（RUN_MODE 不設定或設為 `polling`）
+
+### Cloud Run 部署（Webhook 模式）
+- **平台**: Google Cloud Run
+- **特性**: Scale-to-Zero、按需付費
+- **預設並發**: 建議 `MAX_CONCURRENT=1`（避免冷啟動衝突）
+- **環境變數**:
+  - `TELEGRAM_TOKEN`
+  - `RUN_MODE=webhook`
+  - `WEBHOOK_URL=https://your-service-xxx.run.app`
 
 ### 並發配置建議
 

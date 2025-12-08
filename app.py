@@ -15,6 +15,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 讀取執行模式：webhook（Cloud Run）或 polling（Render/本地）
+RUN_MODE = os.environ.get('RUN_MODE', 'polling').lower()
+logger.info(f"🔧 執行模式: {RUN_MODE}")
+
 # 動態並發控制：透過環境變數調整同時處理數量
 # MAX_CONCURRENT=1 → 完全排隊（適合 0.1 CPU / 512MB）
 # MAX_CONCURRENT=2-3 → 輕度並發（適合 0.5 CPU / 1GB）
@@ -22,6 +26,10 @@ logger = logging.getLogger(__name__)
 MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT', '1'))
 processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 logger.info(f"🔧 並發控制：最多同時處理 {MAX_CONCURRENT} 個轉檔任務")
+
+# Webhook 模式的超時設定：為應對 Telegram 60 秒限制，預留緩衝時間
+FFMPEG_TIMEOUT = 50 if RUN_MODE == 'webhook' else 300
+logger.info(f"🔧 FFmpeg 超時設定: {FFMPEG_TIMEOUT} 秒")
 
 # 排隊追蹤器：記錄等待中的任務數量
 class QueueTracker:
@@ -80,7 +88,7 @@ def start_dummy_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-# --- 2. 工具函式區 (維持不變) ---
+# --- 2. 工具函式區 ---
 def generate_unique_filename(user_id: int, extension: str) -> str:
     timestamp = int(time.time() * 1000000)
     return f"user_{user_id}_{timestamp}.{extension}"
@@ -138,6 +146,8 @@ def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: in
     """
     使用 FFmpeg 調色盤優化 (palettegen + paletteuse) 產生高品質小檔案 GIF
     會根據影片時長智慧選擇起始配置，減少不必要的嘗試
+    
+    注意：Webhook 模式下，timeout 設為 50 秒以避免 Telegram 60 秒限制觸發重試
     """
     # 嘗試不同的 FPS 和寬度組合 (從高品質到低品質)
     configs = [
@@ -167,7 +177,7 @@ def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: in
                 '-vf', f'{filters},palettegen=stats_mode=diff',
                 '-y', palette_path
             ]
-            result = subprocess.run(palette_cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(palette_cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
             if result.returncode != 0:
                 logger.warning(f"調色盤產生失敗: {result.stderr}")
                 continue
@@ -178,7 +188,7 @@ def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: in
                 '-lavfi', f'{filters} [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=5',
                 '-y', output_path
             ]
-            result = subprocess.run(gif_cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(gif_cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
             if result.returncode != 0:
                 logger.warning(f"GIF 輸出失敗: {result.stderr}")
                 continue
@@ -194,7 +204,10 @@ def convert_to_gif_with_retry(input_path: str, output_path: str, max_size_mb: in
                     os.remove(output_path)
                     
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg 轉檔超時")
+            logger.error(f"FFmpeg 轉檔超時 (>{FFMPEG_TIMEOUT}秒)")
+            # Webhook 模式下，超時直接 Fail Fast，避免 Telegram 重試風暴
+            if RUN_MODE == 'webhook':
+                raise
         except Exception as e:
             logger.error(f"FFmpeg 錯誤: {e}")
         finally:
@@ -318,6 +331,15 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                         await asyncio.sleep(2)  # 等待 2 秒後重試
                     else:
                         raise upload_err
+        
+        except subprocess.TimeoutExpired:
+            # Fail Fast：超時時直接告知使用者，避免 Telegram 重試
+            logger.error("轉檔超時，主動截斷任務")
+            await update.message.reply_text(
+                "⏰ 轉檔超時\n\n"
+                "影片處理時間過長，為避免系統負載已主動中止。\n"
+                "💡 建議：請使用較短的影片（建議 15 秒內）"
+            )
 
         except Exception as e:
             logger.exception("處理錯誤")
@@ -326,6 +348,8 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             cleanup_files(input_path, output_path)
             await queue_tracker.finish_processing()
 
+
+# --- 4. 主程式入口：支援 Webhook 與 Polling 雙模式 ---
 if __name__ == '__main__':
     # 讀取 Token
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -333,14 +357,39 @@ if __name__ == '__main__':
         logger.critical("未設定 TELEGRAM_TOKEN")
         exit(1)
 
-    # A. 啟動假網頁伺服器 (在背景執行，不卡住主程式)
-    threading.Thread(target=start_dummy_server, daemon=True).start()
-
-    # B. 啟動 Bot (Polling)
-    # concurrent_updates=True 允許同時處理多個訊息，不會互相阻塞
+    # 建立 Application
     application = Application.builder().token(token).concurrent_updates(True).build()
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
-    
-    logger.info("✅ Bot 已啟動 (Render Hybrid Mode)")
-    application.run_polling()
+
+    if RUN_MODE == 'webhook':
+        # ===== Cloud Run Webhook 模式 =====
+        port = int(os.environ.get("PORT", 8080))
+        webhook_url = os.environ.get("WEBHOOK_URL")  # 例如: https://your-service-xxx.run.app
+        
+        if not webhook_url:
+            logger.critical("Webhook 模式需設定 WEBHOOK_URL 環境變數")
+            exit(1)
+        
+        # 使用 Token 作為 URL 路徑的一部分，增加安全性
+        webhook_path = f"/{token}"
+        full_webhook_url = f"{webhook_url}{webhook_path}"
+        
+        logger.info(f"✅ Bot 啟動 (Webhook Mode)")
+        logger.info(f"📡 Webhook URL: {webhook_url}/***")
+        logger.info(f"🌐 監聽 Port: {port}")
+        
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=webhook_path,
+            webhook_url=full_webhook_url,
+            drop_pending_updates=True,  # 冷啟動時忽略積壓訊息，避免處理過期請求
+        )
+    else:
+        # ===== Render Polling 模式（預設） =====
+        # 啟動假網頁伺服器 (在背景執行，不卡住主程式)
+        threading.Thread(target=start_dummy_server, daemon=True).start()
+        
+        logger.info("✅ Bot 已啟動 (Polling Mode - Render)")
+        application.run_polling()
