@@ -1,4 +1,9 @@
 import os
+from dotenv import load_dotenv
+
+# 載入 .env 檔案 (本機開發用)
+load_dotenv()
+
 import logging
 import subprocess
 import time
