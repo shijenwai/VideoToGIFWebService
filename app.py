@@ -350,7 +350,8 @@ async def video_to_gif_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # --- 4. 主程式入口：支援 Webhook 與 Polling 雙模式 ---
-if __name__ == '__main__':
+async def main():
+    """主程式入口（async 版本，相容 Python 3.13）"""
     # 讀取 Token
     token = os.environ.get('TELEGRAM_TOKEN')
     if not token:
@@ -361,6 +362,9 @@ if __name__ == '__main__':
     application = Application.builder().token(token).concurrent_updates(True).build()
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
+
+    # 初始化 Application（解決 Python 3.13 相容性問題）
+    await application.initialize()
 
     if RUN_MODE == 'webhook':
         # ===== Cloud Run Webhook 模式 =====
@@ -377,19 +381,42 @@ if __name__ == '__main__':
         
         logger.info(f"✅ Bot 啟動 (Webhook Mode)")
         logger.info(f"📡 Webhook URL: {webhook_url}/***")
-        logger.info(f"🌐 監聽 Port: {port}")
+        logger.info(f"🌐 監聯 Port: {port}")
         
-        application.run_webhook(
+        await application.start()
+        await application.updater.start_webhook(
             listen="0.0.0.0",
             port=port,
             url_path=webhook_path,
             webhook_url=full_webhook_url,
-            drop_pending_updates=True,  # 冷啟動時忽略積壓訊息，避免處理過期請求
+            drop_pending_updates=True,
         )
+        
+        # 保持運行直到收到停止信號
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
     else:
         # ===== Render Polling 模式（預設） =====
         # 啟動假網頁伺服器 (在背景執行，不卡住主程式)
         threading.Thread(target=start_dummy_server, daemon=True).start()
         
         logger.info("✅ Bot 已啟動 (Polling Mode - Render)")
-        application.run_polling()
+        
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=True)
+        
+        # 保持運行直到收到停止信號
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        finally:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

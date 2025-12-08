@@ -31,11 +31,11 @@
 ## Acceptance Criteria
 
 ### Polling 模式驗證
-- [ ] 不設定 `RUN_MODE` 時，顯示 `執行模式: polling`
-- [ ] 顯示 `FFmpeg 超時設定: 300 秒`
-- [ ] 假網頁伺服器正常監聽 Port 10000
-- [ ] 能接收 Telegram 影片訊息
-- [ ] 能成功轉檔並回傳 GIF
+- [x] 不設定 `RUN_MODE` 時，顯示 `執行模式: polling`
+- [x] 顯示 `FFmpeg 超時設定: 300 秒`
+- [x] 假網頁伺服器正常監聽 Port 10000
+- [x] 能接收 Telegram 影片訊息
+- [x] 能成功轉檔並回傳 GIF
 
 ### Webhook 模式驗證
 - [ ] 設定 `RUN_MODE=webhook` 但未設 `WEBHOOK_URL` 時，程式報錯退出
