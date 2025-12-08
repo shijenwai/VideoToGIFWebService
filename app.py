@@ -113,9 +113,12 @@ def get_video_duration(input_path: str) -> float:
             'ffprobe', '-v', 'error',
             '-show_entries', 'format=duration',
             '-of', 'default=noprint_wrappers=1:nokey=1',
+            '-analyzeduration', '2000000',  # 限制分析 2 秒
+            '-probesize', '2000000',        # 限制分析 2MB
             input_path
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # 縮短 timeout，避免卡住
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
             return float(result.stdout.strip())
     except Exception as e:
@@ -129,6 +132,11 @@ def estimate_start_config(duration: float, file_size_mb: float) -> int:
     """
     # 主要根據時長判斷，因為 GIF 大小與幀數（時長×FPS）高度相關
     # 檔案大小作為輔助參考
+    
+    # 如果無法取得時長（ffprobe 失敗），採用保守策略，從中等品質開始（索引 2）
+    if duration == 0:
+        return 2
+
     complexity = duration * file_size_mb
     
     if duration > 90 or complexity > 1500:   # 超過 1.5 分鐘，或複雜度極高
@@ -359,7 +367,15 @@ async def main():
         exit(1)
 
     # 建立 Application
-    application = Application.builder().token(token).concurrent_updates(True).build()
+    application = ( 
+        Application.builder()
+        .token(token)
+        .concurrent_updates(True)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .build()
+    )
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_to_gif_handler))
 
@@ -392,10 +408,18 @@ async def main():
             drop_pending_updates=True,
         )
         
-        # 保持運行直到收到停止信號
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+        # 保持運行直到收到停止信號（Cloud Run 會保持容器運行）
+        logger.info("🚀 Webhook 伺服器已啟動，等待請求...")
+        try:
+            # 使用無限等待保持容器運行
+            stop_event = asyncio.Event()
+            await stop_event.wait()
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        finally:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
     else:
         # ===== Render Polling 模式（預設） =====
         # 啟動假網頁伺服器 (在背景執行，不卡住主程式)

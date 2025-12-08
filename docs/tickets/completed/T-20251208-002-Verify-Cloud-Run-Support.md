@@ -38,10 +38,10 @@
 - [x] 能成功轉檔並回傳 GIF
 
 ### Webhook 模式驗證
-- [ ] 設定 `RUN_MODE=webhook` 但未設 `WEBHOOK_URL` 時，程式報錯退出
-- [ ] 正確設定所有環境變數後，顯示 `執行模式: webhook`
-- [ ] 顯示 `FFmpeg 超時設定: 50 秒`
-- [ ] Webhook URL 包含 Token 路徑
+- [x] 設定 `RUN_MODE=webhook` 但未設 `WEBHOOK_URL` 時，程式報錯退出
+- [x] 正確設定所有環境變數後，顯示 `執行模式: webhook`
+- [x] 顯示 `FFmpeg 超時設定: 50 秒`
+- [x] Webhook URL 包含 Token 路徑（Cloud Run 部署驗證通過）
 
 ## Test Steps
 
