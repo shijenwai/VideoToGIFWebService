@@ -51,12 +51,51 @@
 
 ### Cloud Run 部署（Webhook 模式）
 - **平台**: Google Cloud Run
+- **區域**: `us-central1` (北美，以獲得每個月 1GB 免費流量)
 - **特性**: Scale-to-Zero、按需付費
-- **預設並發**: 建議 `MAX_CONCURRENT=1`（避免冷啟動衝突）
+- **配置**:
+    - **CPU/RAM**: `2 vCPU / 2 GiB Memory`（優化轉檔速度）
+    - **CPU Allocation**: `--no-cpu-throttling`（關鍵！背景轉檔不降速）
+    - **Timeout**: `60s`
+- **部署指令**:
+  > **注意**：首次部署因 URL 尚未生成，需分兩步：
+  > 1. 先用 `WEBHOOK_URL=placeholder` 部署取得 Service URL
+  > ```bash
+  > gcloud run deploy video-to-gif-bot \
+  >   --source . \
+  >   --region us-central1 \
+  >   --platform managed \
+  >   --allow-unauthenticated \
+  >   --set-env-vars "TELEGRAM_TOKEN=你的Token" \
+  >   --set-env-vars "RUN_MODE=webhook" \
+  >   --set-env-vars "MAX_CONCURRENT=1" \
+  >   --set-env-vars "WEBHOOK_URL=https://placeholder.run.app" \
+  >   --memory 2Gi --cpu 2 --timeout 60s --no-cpu-throttling
+  > ```
+  > 2. 再用 `gcloud run services update` 更新正確的 URL
+  > ```bash
+  > gcloud run services update video-to-gif-bot \
+  >   --region us-central1 \
+  >   --update-env-vars "WEBHOOK_URL=https://(你的服務URL)"
+  > ```
+
+  ```bash
+  # 日常更新程式碼/配置使用此指令
+  gcloud run deploy video-to-gif-bot `
+    --source . `
+    --region us-central1 `
+    --platform managed `
+    --allow-unauthenticated `
+    --set-env-vars "TELEGRAM_TOKEN=你的Token" `
+    --set-env-vars "RUN_MODE=webhook" \
+    --set-env-vars "MAX_CONCURRENT=1" \
+    --set-env-vars "WEBHOOK_URL=https://(你的服務URL)" \
+    --memory 2Gi --cpu 2 --timeout 60s --no-cpu-throttling
+  ```
 - **環境變數**:
   - `TELEGRAM_TOKEN`
   - `RUN_MODE=webhook`
-  - `WEBHOOK_URL=https://your-service-xxx.run.app`
+  - `WEBHOOK_URL=https://video-to-gif-bot-xxxxx.us-central1.run.app`
 
 ### 並發配置建議
 
@@ -161,3 +200,30 @@ Please break the plan down into small, easy-to-test, actionable tickets in markd
 
 **更新記錄**:
 - 2025-12-07: 初始建立 AI 協作架構
+- 2025-12-09: 更新 Cloud Run 部署配置 (US-Central1, 預算監控)
+
+## 成本監控與預算管理 (Cost Management)
+
+由於 Cloud Run 是按需付費，建議定期檢查使用量並設定預算警告。
+
+### 1. 查看免費額度使用詳細報表
+1. 進入 [Google Cloud Console Billing](https://console.cloud.google.com/billing)
+2. 選擇專案 (`tgbot-videotogif`)
+3. 點選左側 **"Reports" (報表)**
+4. 右側圖表預設顯示費用 (Cost)。將 **"Metric"** 改為 **"Usage"** 即可看到具體使用量（vCPU-秒、GiB-秒）。
+   - **免費額度參考**:
+     - vCPU: 每月 180,000 vCPU-秒
+     - Mameory: 每月 360,000 GiB-秒
+     - Requests: 每月 200 萬次
+     - Network Egress (流量): 若在 `us-central1`，每月首 1GB 免費
+
+### 2. 設定預算警告 (Budget Alerts)
+強烈建議設定小額預算通知，避免意外爆量。
+
+1. 進入 Billing > **"Budgets & alerts"**
+2. 點選 **"Create Budget"**
+3. 設定：
+   - **Name**: `Cloud Run Safety Net`
+   - **Amount**: `$1.00` (設定為 1 美金)
+   - **Actions**: 勾選 "Email alerts to billing admins"
+4. 當每月費用預估超過 $0.5 或 $1.0 時，Google 就會寄信通知你。
